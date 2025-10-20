@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""
+Simple Poisson timestep test
+"""
+
+import torch
+import matplotlib.pyplot as plt
+import numpy as np
+
+def poisson_encode(x):
+    """Simple Poisson encoding"""
+    return torch.rand_like(x).le(x).float()
+
+def poisson_decode(spikes):
+    """Simple Poisson decoding - handle multiple features"""
+    if spikes.dim() == 2:
+        # Single feature: [features, timesteps] -> [features]
+        return spikes.mean(dim=1)
+    elif spikes.dim() == 3:
+        # Multiple features: [batch, features, timesteps] -> [batch, features]
+        return spikes.mean(dim=2)
+
+def test_timesteps(features, timesteps):
+    """Test different timesteps - handle multiple features"""
+    torch.manual_seed(42)
+    
+    # Handle both single and multiple features
+    if features.dim() == 1:
+        # Single feature sequence: [5] -> [5, timesteps]
+        x = features.unsqueeze(1).repeat(1, timesteps)
+    else:
+        # Multiple features: [batch, features] -> [batch, features, timesteps]
+        x = features.unsqueeze(2).repeat(1, 1, timesteps)
+    
+    # Encode and decode
+    spikes = poisson_encode(x)
+    reconstructed = poisson_decode(spikes)
+    
+    # Calculate error
+    mse = torch.mean((features - reconstructed) ** 2).item()
+
+
+    #     # 信噪比 (SNR)
+    # signal_power = np.mean(features ** 2)
+    signal_power = torch.mean(features ** 2).item()  # 核心修改：替换torch.var(features)
+    # noise_power = mse
+    # snr = 10 * np.log10(signal_power / noise_power) if noise_power > 0 else float('inf')
+    
+    # # 相关系数
+    # correlation = np.corrcoef(features, reconstructed)[0, 1]
+    
+    # return mse,snr, correlation, reconstructed
+
+    # 2. 计算SNR（信噪比）
+    # SNR = 10 * log10(信号功率 / 噪声功率)
+    # 其中噪声功率 = MSE，信号功率 = 原始信号的方差（或能量）
+    # signal_power = torch.var(features).item()  # 信号功率用方差表示
+    noise_power = mse                          # 噪声功率 = MSE
+    snr = 10 * torch.log10(torch.tensor(signal_power / noise_power)).item()
+    
+    # 3. 计算相关系数（Pearson相关性）
+    # 相关系数 = 协方差(features, reconstructed) / (标准差(features) * 标准差(reconstructed))
+    covariance = torch.mean((features - torch.mean(features)) * (reconstructed - torch.mean(reconstructed))).item()
+    std_features = torch.std(features).item()
+    std_reconstructed = torch.std(reconstructed).item()
+    correlation = covariance / (std_features * std_reconstructed)
+    
+    # return {
+    #     "mse": mse,
+    #     "snr": snr,
+    #     "correlation": correlation
+    # }
+    return mse, snr, correlation, reconstructed
+
+
+
+def main():
+    num_features = 1000
+    features = (0.8 + torch.rand(num_features) * 0.2)
+
+
+    # 生成[0, 1]之间的随机分布特征
+    # 这里features已经是[0.8, 1.0)的均匀分布，如果你想要[0, 1)的均匀分布：
+    features = torch.rand(num_features)
+
+    # import json
+
+    # # 定义信号列表和文件路径
+    # signals = ['ecg', 'eeg', 'ppg']
+    # data_path = "/mnt/i/ephy_proc/datasets/"
+    # signals = ['ecg']
+    # # 读取每个信号的JSON数据
+    # for signal in signals:
+    #     with open(f"{data_path}{signal}.json", 'r') as f:
+    #         # 加载数据（直接得到包含2000个点的列表）
+    #         signal_data = json.load(f)
+    #         print(f"读取 {signal} 数据：共 {len(signal_data)} 个点，前5个点：{signal_data[:5]}")
+
+
+    
+
+    # data_tensor = torch.tensor(signal_data, dtype=torch.float32)
+    # min_val, max_val = data_tensor.min(), data_tensor.max()
+    # features = (data_tensor - min_val) / (max_val - min_val)   # 归一化到
+
+
+    assert torch.all(features <= 1), f"值中存在 >1: {features[features > 1]}"
+    assert torch.all(features >= 0), f"值中存在 <0: {features[features < 0]}"
+    timestep_range = range(1, 51)
+    mse_values = []
+    snr_values = []
+    correlation_values = []
+    for ts in timestep_range:
+        mse, snr, correlation, _ = test_timesteps(features, ts)
+        mse_values.append(mse)
+        snr_values.append(snr)
+        correlation_values.append(correlation)
+    best_idx_mse = min(range(len(mse_values)), key=lambda i: mse_values[i])
+    best_ts_mse = list(timestep_range)[best_idx_mse]
+    print(f"Best timesteps for MSE: {best_ts_mse} (MSE: {mse_values[best_idx_mse]:.4f})")
+
+
+
+    plt.rcParams.update({
+        'font.family': 'Serif',  # 英文顶刊强制字体
+        'axes.titlesize': 10,             # 图标题：10pt加粗
+        'axes.labelsize': 9,              # 轴标签：9pt（如“Time Steps”“MSE”）
+        'xtick.labelsize': 8,             # X轴刻度：8pt
+        'ytick.labelsize': 8,             # Y轴刻度：8pt
+        'legend.fontsize': 9,             # 图例：9pt
+        'axes.titleweight': 'bold'        # 图标题加粗
+    })
+
+    # fig, ax_mse = plt.subplots(figsize=(9, 5))
+    # fig, ax_mse = plt.subplots(figsize=(3.5, 2.2))
+    fig, ax_mse = plt.subplots(figsize=(4.0, 2.5))
+
+    ax_snr = ax_mse.twinx()                 # 第二个y轴 (右侧)
+    ax_corr = ax_mse.twinx()                # 第三个y轴
+    # ax_corr.spines["right"].set_position(("axes", 1.12))  # 往右偏移
+    # 原代码：ax_corr.spines["right"].set_position(("axes", 1.12))
+    # 修改后（间距调整为1.2，避免文字拥挤）：
+    ax_corr.spines["right"].set_position(("axes", 1.2))
+    # 补充Y轴范围验证（确保Correlation在[0,1]，与代码一致）
+    ax_corr.set_ylim(0, 1.0)
+
+    ax_corr.spines["right"].set_visible(True)
+
+
+
+    # 曲线
+    # l1 = ax_mse.plot(timestep_range, mse_values, 'o-', color='#1f77b4', label='MSE')[0]
+    # l2 = ax_snr.plot(timestep_range, snr_values, 's--', color='#d62728', label='SNR (dB)')[0]
+    # l3 = ax_corr.plot(timestep_range, correlation_values, '^-', color='#2ca02c', label='Correlation')[0]
+    # 原代码：l1 = ax_mse.plot(timestep_range, mse_values, 'o-', color='#1f77b4', label='MSE')[0]
+    # 修改后（线宽0.8pt，符号大小4pt，符合顶刊“清晰不拥挤”要求）：
+    l1 = ax_mse.plot(timestep_range, mse_values, 'o-', color='#1f77b4', label='MSE', 
+                    linewidth=0.8, markersize=4)[0]
+    l2 = ax_snr.plot(timestep_range, snr_values, 's--', color='#d62728', label='SNR (dB)', 
+                    linewidth=0.8, markersize=4)[0]
+    l3 = ax_corr.plot(timestep_range, correlation_values, '^-', color='#2ca02c', label='Correlation', 
+                    linewidth=0.8, markersize=4)[0]
+    # 轴标签与范围
+    ax_mse.set_xlabel('Time Steps')
+    ax_mse.set_ylabel('MSE', color=l1.get_color())
+    ax_snr.set_ylabel('SNR (dB)', color=l2.get_color())
+    ax_corr.set_ylabel('Correlation', color=l3.get_color())
+    ax_corr.set_ylim(0, 1.0)
+
+    for ax, col in [(ax_mse, l1.get_color()), (ax_snr, l2.get_color()), (ax_corr, l3.get_color())]:
+        ax.tick_params(axis='y', labelcolor=col)
+
+    # 设置坐标轴线宽1pt（顶刊推荐1-1.5pt）
+    for ax in [ax_mse, ax_snr, ax_corr]:
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.0)
+    # 网格线宽0.5pt，透明度0.3（避免遮挡曲线）
+    ax_mse.grid(True, alpha=0.3, linewidth=0.5)
+    # # 网格只开主轴
+    # ax_mse.grid(True, alpha=0.35)
+
+    # # 合并图例
+    # lines = [l1, l2, l3]
+    # labels = [ln.get_label() for ln in lines]
+    # ax_mse.legend(lines, labels, loc='upper center')
+
+
+    # 4. 关键：设置图例在顶部居中
+    ax.legend(
+        [l1, l2, l3],  # 图例关联的线条
+        ['MSE', 'SNR (dB)', 'Correlation'],  # 图例标签
+        loc='upper center',  # 参考锚点为顶部居中
+        bbox_to_anchor=(0.5, 1.25),  # 归一化坐标：水平居中(0.5)，垂直靠近顶部(0.98)
+        ncol=3,  # 图例分3列显示（使横向更紧凑）
+        fontsize='small',
+        frameon=False  # 去掉图例边框，更简洁（可选）
+    )
+
+    # ax_mse.set_title('Poisson Encoding Metrics vs Time Steps (Single Figure)')
+    fig.tight_layout()
+    # plt.show()
+    # 保存图片，符合发表要求（高分辨率、白色背景、去除多余边距）
+    fig.savefig("poisson_encoding_metrics_vs_timesteps.png", dpi=300, bbox_inches='tight', facecolor='white')
+    print("Figure saved as poisson_encoding_metrics_vs_timesteps.png")
+
+
+if __name__ == "__main__":
+    main()
